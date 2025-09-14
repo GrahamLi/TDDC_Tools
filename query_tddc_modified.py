@@ -1,128 +1,93 @@
 import argparse
 import os
+import re # Import the regular expression module
 from datetime import datetime, date, timedelta
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-import urllib3
-
-# Disable SSL warnings for wearn.com
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
-WEARN_URL = "https://stock.wearn.com/cdata.asp"
-
+import yfinance as yf
 
 def parse_date(value: str) -> date:
+    """Parses a date string in YYYY-MM-DD format."""
     return datetime.strptime(value, "%Y-%m-%d").date()
 
+def to_date_obj(s: str) -> Optional[date]:
+    """Converts a date string in YYYYMMDD format to a date object."""
+    try:
+        return datetime.strptime(s, "%Y%m%d").date()
+    except (ValueError, TypeError):
+        return None
 
-def find_available_dates(raw_root: str) -> List[str]:
-    """Find all available dates from the directory structure of fetch_tdcc.py"""
-    available_dates = []
-    if not os.path.exists(raw_root):
-        return []
-    for stock_dir in os.listdir(raw_root):
-        stock_path = os.path.join(raw_root, stock_dir)
-        if os.path.isdir(stock_path):
-            for file_name in os.listdir(stock_path):
-                if file_name.endswith('.csv'):
-                    date_str = file_name.replace('.csv', '')
-                    if len(date_str) == 8 and date_str.isdigit():
-                        available_dates.append(date_str)
-    return sorted(list(set(available_dates)))
+# --- NEW: Function to create a sort key from the distribution level string ---
+def get_sort_key(level_str: str) -> int:
+    """Extracts the first number from a string like '1,000-5,000' for sorting."""
+    # Handle non-numeric rows first
+    if '合計' in level_str:
+        return 999999999998 # Put '合計' near the end
+    if any(k in level_str for k in ['周開盤價', '周最高價', '周最低價', '周收盤價', '周成交量']):
+        return 999999999999 # Put OHLCV data at the very end
+        
+    nums = re.findall(r'[\d,]+', level_str)
+    if not nums:
+        return 999999999999 # Default for any other non-numeric rows
+    return int(nums[0].replace(',', ''))
 
 
-def find_start_date(dates: List[str], start: date) -> Tuple[str, bool]:
-    """Find the start date from available dates"""
-    dt_dates = []
-    for d in dates:
+def find_closest_past_date(target_date: date, available_dates: List[date]) -> Optional[date]:
+    """Finds the latest date in the list that is on or before the target date."""
+    past_dates = [d for d in available_dates if d <= target_date]
+    if not past_dates:
+        return None
+    return max(past_dates)
+
+def fetch_yahoo_finance_range(start: date, end: date, ticker: str) -> pd.DataFrame:
+    """
+    Fetches stock data from Yahoo Finance, automatically trying both .TW and .TWO suffixes.
+    """
+    end_adjusted = end + timedelta(days=1)
+    tickers_to_try = [f"{ticker}.TW", f"{ticker}.TWO"]
+    df_price = pd.DataFrame()
+
+    for yahoo_ticker in tickers_to_try:
         try:
-            dt = datetime.strptime(d, "%Y%m%d").date()
-            dt_dates.append((d, dt))
-        except Exception:
+            print(f"Attempting to fetch daily data for {yahoo_ticker} from Yahoo Finance...")
+            current_df = yf.download(yahoo_ticker, start=start, end=end_adjusted, progress=False, auto_adjust=False, interval="1d")
+
+            if not current_df.empty and 'Close' in current_df.columns:
+                print(f"Successfully fetched daily data for {yahoo_ticker}.")
+                df_price = current_df
+                break
+            
+            print(f"Daily data not found for {yahoo_ticker}. Falling back to fetch weekly data...")
+            current_df_weekly = yf.download(yahoo_ticker, start=start, end=end_adjusted, progress=False, auto_adjust=False, interval="1wk")
+            
+            if not current_df_weekly.empty and 'Close' in current_df_weekly.columns:
+                print(f"Successfully fetched weekly data for {yahoo_ticker}.")
+                df_price = current_df_weekly
+                break
+        except Exception as e:
+            print(f"An error occurred while fetching {yahoo_ticker}: {e}")
             continue
     
-    dt_dates.sort(key=lambda x: x[1])
-    for d_str, dt in dt_dates:
-        if dt >= start:
-            return d_str, True
+    if df_price.empty:
+        return pd.DataFrame()
+
+    if isinstance(df_price.columns, pd.MultiIndex):
+        df_price.columns = df_price.columns.get_level_values(0)
+        
+    df_price.rename(columns={
+        'Open': 'open', 'High': 'high', 'Low': 'low',
+        'Close': 'close', 'Volume': 'vol', 'Adj Close': 'adj_close'
+    }, inplace=True, errors='ignore')
     
-    prev = None
-    for d_str, dt in dt_dates:
-        if dt <= start:
-            prev = d_str
-        else:
-            break
-    if prev:
-        return prev, False
-    
-    return dates[0] if dates else "", False
-
-
-def fetch_wearn_month(year: int, month: int, kind: str) -> pd.DataFrame:
-    params = {"Year": f"{year:03d}", "month": f"{month:02d}", "kind": kind}
-    r = requests.get(WEARN_URL, params=params, timeout=30, verify=False)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "lxml")
-    table = soup.find("table")
-    if not table:
-        return pd.DataFrame()
-    rows = []
-    for tr in table.find_all("tr"):
-        cols = [td.get_text(strip=True) for td in tr.find_all("td")]
-        if len(cols) >= 7 and cols[0]:
-            rows.append(cols[:7])
-    if not rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "chg", "vol"])
-    
-    def parse_roc(s: str) -> Optional[date]:
-        try:
-            parts = s.split("/")
-            roc_y = int(parts[0])
-            y = roc_y + 1911
-            return date(y, int(parts[1]), int(parts[2]))
-        except Exception:
-            return None
-            
-    df["gdate"] = df["date"].apply(parse_roc)
-    df = df.dropna(subset=["gdate"])
-    for col in ["open", "high", "low", "close", "vol"]:
-        df[col] = pd.to_numeric(df[col].str.replace(",", ""), errors="coerce")
-    return df.dropna(subset=["open", "high", "low", "close", "vol"])
-
-
-def fetch_wearn_range(start: date, end: date, kind: str) -> pd.DataFrame:
-    dfs = []
-    cur = date(start.year, start.month, 1)
-    while cur <= end:
-        roc_year = cur.year - 1911
-        month_df = fetch_wearn_month(roc_year, cur.month, kind)
-        if not month_df.empty:
-            dfs.append(month_df)
-        if cur.month == 12:
-            cur = date(cur.year + 1, 1, 1)
-        else:
-            cur = date(cur.year, cur.month + 1, 1)
-    if not dfs:
-        return pd.DataFrame()
-    df = pd.concat(dfs, ignore_index=True)
-    if "gdate" not in df.columns:
-        return pd.DataFrame()
-    df["gdate"] = pd.to_datetime(df["gdate"])
-    df = df[(df["gdate"] >= pd.Timestamp(start)) & (df["gdate"] <= pd.Timestamp(end))]
-    return df.sort_values("gdate")
-
+    df_price.index.name = 'gdate'
+    return df_price
 
 def get_ticker_data_from_tdcc_files(file_paths: List[str], ticker: str) -> pd.DataFrame:
     records = []
     for csv_path in file_paths:
         try:
             df = pd.read_csv(csv_path)
-            # The file name is the date
             date_str = os.path.basename(csv_path).replace('.csv', '')
             df["週期日期"] = date_str
             records.append(df)
@@ -134,7 +99,7 @@ def get_ticker_data_from_tdcc_files(file_paths: List[str], ticker: str) -> pd.Da
     return pd.concat(records, ignore_index=True)
 
 def main():
-    parser = argparse.ArgumentParser(description="Query TDCC distribution, merge with K-line/Volume, and save to Excel.")
+    parser = argparse.ArgumentParser(description="Query TDCC distribution for a date range, merging with K-line/Volume from Yahoo Finance.")
     parser.add_argument("--base", required=True, help="Base directory where data is stored.")
     parser.add_argument("--ticker", required=True, help="Stock ticker to process.")
     parser.add_argument("--start", required=True, help="Start date in YYYY-MM-DD format.")
@@ -147,115 +112,131 @@ def main():
     out_query_dir = os.path.join(data_root, "query_excel")
     os.makedirs(out_query_dir, exist_ok=True)
 
-    start_d = parse_date(args.start)
-    end_d = parse_date(args.end)
+    user_start_d = parse_date(args.start)
+    user_end_d = parse_date(args.end)
     
     ticker_tdcc_path = os.path.join(raw_root, args.ticker)
     if not os.path.exists(ticker_tdcc_path):
         print(f"Error: No data found for ticker {args.ticker} in {raw_root}.")
-        print("Please run fetch_tdcc.py first.")
         return
 
     available_files = [os.path.join(ticker_tdcc_path, f) for f in os.listdir(ticker_tdcc_path) if f.endswith('.csv')]
-    available_dates = sorted([os.path.basename(f).replace('.csv', '') for f in available_files])
+    available_dates_str = sorted([os.path.basename(f).replace('.csv', '') for f in available_files])
 
-    if not available_dates:
+    if not available_dates_str:
         print(f"No TDCC CSV files found for ticker {args.ticker}.")
         return
-    
-    print(f"Found {len(available_dates)} available dates for ticker {args.ticker}")
-    
-    start_date_str, is_ge = find_start_date(available_dates, start_d)
-    if not is_ge:
-        print("Warning: No data >= start date; using nearest <= week.")
 
-    def to_date(s: str) -> Optional[date]:
-        try: return datetime.strptime(s, "%Y%m%d").date()
-        except: return None
+    all_possible_dates = sorted([d for d in (to_date_obj(s) for s in available_dates_str) if d is not None])
+    actual_start_date = find_closest_past_date(user_start_d, all_possible_dates)
+    actual_end_date = find_closest_past_date(user_end_d, all_possible_dates)
 
-    selected_dates = [d for d in available_dates if start_d <= (to_date(d) or date(1900,1,1)) <= end_d]
-    if not selected_dates:
-        sdt = to_date(start_date_str)
-        if sdt:
-            selected_dates = [start_date_str]
+    if not actual_start_date or not actual_end_date or actual_start_date > actual_end_date:
+        print(f"Error: Could not determine a valid data range based on your inputs.")
+        return
 
-    print(f"Selected {len(selected_dates)} TDCC dates for processing.")
-    selected_files = [os.path.join(ticker_tdcc_path, f"{d}.csv") for d in selected_dates]
+    print(f"User provided range: {user_start_d} to {user_end_d}")
+    print(f"Found actual data range: {actual_start_date} to {actual_end_date}")
 
+    selected_dates_obj = [d for d in all_possible_dates if actual_start_date <= d <= actual_end_date]
+    selected_dates_str = [d.strftime('%Y%m%d') for d in selected_dates_obj]
+
+    print(f"Selected {len(selected_dates_str)} TDCC dates for processing.")
+    selected_files = [os.path.join(ticker_tdcc_path, f"{d}.csv") for d in selected_dates_str]
     full_tdcc_data = get_ticker_data_from_tdcc_files(selected_files, args.ticker)
+
     if full_tdcc_data.empty:
         print("Could not load any TDCC data for the specified range.")
         return
 
-    print(f"Combined TDCC data shape: {full_tdcc_data.shape}")
+    def find_col(df_cols, keyword):
+        for col in df_cols:
+            normalized_col = col.replace('\u3000', '').replace(' ', '')
+            if keyword in normalized_col: return col
+        raise KeyError(f"Keyword '{keyword}' not found in any column. Available columns: {list(df_cols)}")
 
-    col_level = "持股/單位數分級"
-    col_people = "人\u3000\u3000\u3000數"
-    col_shares = "股\u3000\u3000\u3000數/單位數"
-    col_ratio = "占集保庫存數比例 (%)"
+    try:
+        actual_cols = full_tdcc_data.columns
+        col_level = find_col(actual_cols, "持股/單位數分級")
+        col_people = find_col(actual_cols, "人數")
+        col_shares = find_col(actual_cols, "股數")
+        col_ratio = find_col(actual_cols, "占集保庫存數比例")
+    except KeyError as e:
+        print(f"Error: Could not automatically identify required columns. {e}")
+        return
 
-    # --- 1. Create Pivot Tables (transposed) ---
     people_tbl = full_tdcc_data.pivot_table(index=col_level, columns="週期日期", values=col_people, aggfunc="first")
     shares_tbl = full_tdcc_data.pivot_table(index=col_level, columns="週期日期", values=col_shares, aggfunc="first")
     ratio_tbl = full_tdcc_data.pivot_table(index=col_level, columns="週期日期", values=col_ratio, aggfunc="first")
 
-    # --- 2. Fetch and Prepare K-line/Volume Data ---
-    print("Fetching price data from wearn.com...")
-    df_price_daily = fetch_wearn_range(start_d, end_d, args.ticker)
+    fetch_start_date = actual_start_date - timedelta(days=7)
+    df_price = fetch_yahoo_finance_range(fetch_start_date, actual_end_date, args.ticker)
     
-    if df_price_daily.empty:
-        print("Warning: No price data available from wearn.com for this range.")
-    else:
-        print(f"Daily price data shape: {df_price_daily.shape}")
-        df_price_daily.set_index('gdate', inplace=True)
+    df_price_weekly = pd.DataFrame() # Initialize empty dataframe
+    if not df_price.empty:
+        expected_cols = ['open', 'high', 'low', 'close', 'vol']
+        if all(col in df_price.columns for col in expected_cols):
+            print("Valid price data found. Processing and merging...")
+            is_daily_data = pd.Series(df_price.index).diff().min() <= timedelta(days=5)
+            if is_daily_data:
+                weekly_agg = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'vol': 'sum'}
+                df_price_weekly = df_price.resample('W-FRI').agg(weekly_agg).dropna()
+            else:
+                df_price_weekly = df_price
+
+    # --- MODIFIED: Combine all tables into a single DataFrame for one sheet ---
+    
+    # Process and sort each table
+    all_tables = {'人數 (People)': people_tbl, '股數 (Shares)': shares_tbl, '佔比 (Ratio %)': ratio_tbl}
+    final_dfs = []
+
+    for name, tbl in all_tables.items():
+        # Create a header for this section
+        header = pd.DataFrame([[name] + [''] * (len(tbl.columns) -1) ], columns=tbl.columns)
         
-        # Resample to weekly, anchored on Friday
-        weekly_agg = {
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'vol': 'sum'
-        }
-        df_price_weekly = df_price_daily.resample('W-FRI').agg(weekly_agg).dropna()
-        print(f"Resampled weekly price data shape: {df_price_weekly.shape}")
+        # Sort the data rows
+        data_rows = tbl.loc[~tbl.index.str.contains('周|合計', na=False)].copy()
+        data_rows['sort_key'] = data_rows.index.map(get_sort_key)
+        data_rows.sort_values('sort_key', inplace=True)
+        data_rows.drop(columns='sort_key', inplace=True)
 
-        # --- 3. Align Dates and Create New Rows ---
-        close_prices = {}
-        volumes = {}
+        final_dfs.append(header)
+        final_dfs.append(data_rows)
 
+    # Combine all parts
+    combined_df = pd.concat(final_dfs)
+
+    # Append OHLCV data at the very end
+    if not df_price_weekly.empty:
+        ohlcv_data_rows = {}
         for str_date in people_tbl.columns:
-            tdcc_date = to_date(str_date)
+            tdcc_date = to_date_obj(str_date)
             if not tdcc_date: continue
             
-            # Align TDCC date (can be Sat/Sun) to its preceding Friday
-            aligned_friday = tdcc_date - timedelta(days=(tdcc_date.weekday() - 4) % 7)
-            
-            if aligned_friday in df_price_weekly.index:
-                close_prices[str_date] = df_price_weekly.loc[aligned_friday, 'close']
-                volumes[str_date] = df_price_weekly.loc[aligned_friday, 'vol']
-            else:
-                close_prices[str_date] = None
-                volumes[str_date] = None
+            tdcc_timestamp = pd.Timestamp(tdcc_date)
+            past_price_dates = df_price_weekly.index[df_price_weekly.index <= tdcc_timestamp]
 
-        # Create new rows as DataFrames to append
-        close_row = pd.DataFrame([close_prices]).rename(index={0: '周收盤價'})
-        volume_row = pd.DataFrame([volumes]).rename(index={0: '周成交量'})
+            if not past_price_dates.empty:
+                closest_price_date = past_price_dates.max()
+                week_data = df_price_weekly.loc[closest_price_date]
+                ohlcv_data_rows.setdefault('周開盤價', {})[str_date] = week_data['open']
+                ohlcv_data_rows.setdefault('周最高價', {})[str_date] = week_data['high']
+                ohlcv_data_rows.setdefault('周最低價', {})[str_date] = week_data['low']
+                ohlcv_data_rows.setdefault('周收盤價', {})[str_date] = week_data['close']
+                ohlcv_data_rows.setdefault('周成交量', {})[str_date] = week_data['vol']
+        
+        if ohlcv_data_rows:
+            separator = pd.DataFrame([['---'] * len(people_tbl.columns)], columns=people_tbl.columns, index=[''])
+            ohlcv_df = pd.DataFrame.from_dict(ohlcv_data_rows, orient='index')
+            combined_df = pd.concat([combined_df, separator, ohlcv_df])
 
-        # --- 4. Append New Rows to Each Table ---
-        people_tbl = pd.concat([people_tbl, close_row, volume_row])
-        shares_tbl = pd.concat([shares_tbl, close_row, volume_row])
-        ratio_tbl = pd.concat([ratio_tbl, close_row, volume_row])
+    # Save the combined DataFrame to a single sheet
+    start_str = actual_start_date.strftime('%Y-%m-%d')
+    end_str = actual_end_date.strftime('%Y-%m-%d')
+    out_xlsx = os.path.join(out_query_dir, f"{args.ticker}_{start_str}_to_{end_str}_Combined.xlsx")
+    combined_df.to_excel(out_xlsx, sheet_name='Combined_Report', header=True)
 
-    # --- 5. Save to Excel ---
-    out_xlsx = os.path.join(out_query_dir, f"{args.ticker}_{args.start}_{args.end}.xlsx")
-    with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
-        people_tbl.to_excel(writer, sheet_name="People")
-        shares_tbl.to_excel(writer, sheet_name="Shares")
-        ratio_tbl.to_excel(writer, sheet_name="RatioPct")
-
-    print(f"\nProcessing complete. Saved results to {out_xlsx}")
-
+    print(f"\nProcessing complete. Saved combined report to {out_xlsx}")
 
 if __name__ == "__main__":
     main()
