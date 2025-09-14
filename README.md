@@ -54,7 +54,13 @@ python "C:\Users\Wayne\Documents\fetch_tdcc_modified.py" --base "F:\Investment a
 
 # 抓取最近10週的資料進行測試
 python "C:\Users\Wayne\Documents\fetch_tdcc_modified.py" --base "F:\Investment and Finance\tdcc_tools" --first-run-weeks 10
+
+# 當前目錄
+python fetch_tdcc_modified.py
 ```
+
+
+
 **參數說明：**
 - `--base`：(必要) 專案根目錄路徑。
 - `--stock-list`：(可選) 股票列表CSV檔案路徑。預設為 `C:\Users\Wayne\Documents\stock_list.csv`。
@@ -65,7 +71,12 @@ python "C:\Users\Wayne\Documents\fetch_tdcc_modified.py" --base "F:\Investment a
 ```bash
 # 查詢台積電(2330)在指定期間的股權分散，並整合K線資料
 python "C:\Users\Wayne\Documents\query_tddc_modified.py" --base "F:\Investment and Finance\tdcc_tools" --ticker 2330 --start 2023-01-01 --end 2023-12-31
+
+# 當前目錄
+python query_tddc_modified.py --ticker 2330 --start 2023-01-01 --end 2023-12-31
+
 ```
+
 **參數說明：**
 - `--base`：(必要) 專案根目錄路徑。
 - `--ticker`：(必要) 股票代號。
@@ -79,6 +90,12 @@ python "C:\Users\Wayne\Documents\plottingTrends_tddc_modified.py" --base "F:\Inv
 
 # 使用金額分組方案（需提供股價）
 python "C:\Users\Wayne\Documents\plottingTrends_tddc_modified.py" --base "F:\Investment and Finance\tdcc_tools" --input "F:\Investment and Finance\tdcc_tools\data\query_excel\2330_2023-01-01_2023-12-31.xlsx" --scheme amount --price 600
+
+
+# 當前目錄
+python plottingTrends_tddc_modified.py --input "F:\Investment and Finance\tdcc_tools\data\query_excel\2330_2023-01-01_2023-12-31.xlsx" 
+
+
 ```
 **參數說明：**
 - `--base`：(必要) 專案根目錄路徑。
@@ -112,7 +129,7 @@ F:\Investment and Finance\tdcc_tools\
 ## 資料來源
 
 - **TDCC股權分散**：`https://www.tdcc.com.tw/portal/zh/smWeb/qryStock`
-- **週K線/成交量**：`https://stock.wearn.com/cdata.asp`
+- **週K線/成交量**：`https://tw.stock.yahoo.com/class/`
 - **股票列表**：台灣證券交易所 & 櫃檯買賣中心
 
 ## 注意事項
