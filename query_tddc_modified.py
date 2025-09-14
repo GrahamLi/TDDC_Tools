@@ -99,8 +99,17 @@ def get_ticker_data_from_tdcc_files(file_paths: List[str], ticker: str) -> pd.Da
     return pd.concat(records, ignore_index=True)
 
 def main():
+    
     parser = argparse.ArgumentParser(description="Query TDCC distribution for a date range, merging with K-line/Volume from Yahoo Finance.")
-    parser.add_argument("--base", required=True, help="Base directory where data is stored.")
+
+    # --- MODIFIED: Make --base optional and default to the script's directory ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parser.add_argument(
+        "--base",
+        default=script_dir,
+        help=f"專案根目錄路徑。預設為本檔案所在目錄: {script_dir}"
+    )
+    ##########################################################################
     parser.add_argument("--ticker", required=True, help="Stock ticker to process.")
     parser.add_argument("--start", required=True, help="Start date in YYYY-MM-DD format.")
     parser.add_argument("--end", required=True, help="End date in YYYY-MM-DD format.")

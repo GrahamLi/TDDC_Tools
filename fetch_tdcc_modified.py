@@ -137,8 +137,18 @@ def get_date_range_for_first_run(date_options: List[Tuple[str, str]], weeks: int
 def main():
     # Correctly expand the user's home directory with a single tilde
     default_stock_list_path = os.path.join(os.path.expanduser("~"), "Documents", "stock_list.csv")
+
+
     parser = argparse.ArgumentParser(description="Fetch TDCC shareholder distribution data from a local stock list CSV.")
-    parser.add_argument("--base", required=True, help="Base directory to store the data.")
+    
+    # --- MODIFIED: Make --base optional and default to the script's directory ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parser.add_argument(
+        "--base", 
+        default=script_dir, 
+        help=f"專案根目錄路徑。預設為本檔案所在目錄: {script_dir}"
+    )
+    #################################################################################
     parser.add_argument("--stock-list", default=default_stock_list_path, help=f"Path to the stock list CSV file. Defaults to {default_stock_list_path}")
     parser.add_argument("--max-workers", type=int, default=8)
     parser.add_argument("--sleep", type=float, default=0.6, help="Seconds to sleep between requests")

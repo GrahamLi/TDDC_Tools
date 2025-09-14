@@ -63,6 +63,9 @@ python fetch_tdcc_modified.py
 
 **參數說明：**
 - `--base`：(必要) 專案根目錄路徑。
+- 程式會使用這個 --base 路徑，在底下建立 data/tdcc_raw 資料夾。
+- 所有從台灣集保中心下載回來的原始 .csv 檔案，都會被儲存在這個位置。
+
 - `--stock-list`：(可選) 股票列表CSV檔案路徑。預設為 `C:\Users\Wayne\Documents\stock_list.csv`。
 - `--max-workers`：(可選) 並行下載數量（預設8）。
 - `--first-run-weeks`：(可選) **首次執行**時要抓取的週數（預設52）。
@@ -79,6 +82,9 @@ python query_tddc_modified.py --ticker 2330 --start 2023-01-01 --end 2023-12-31
 
 **參數說明：**
 - `--base`：(必要) 專案根目錄路徑。
+- 讀取：程式會根據 --base 路徑去 data/tdcc_raw 資料夾中讀取第一步下載的 .csv 檔案。
+- 儲存：程式會將整合 K 線資料後產生的 Excel 報表，儲存到 --base 路徑下的 data/query_excel 資料夾中。
+
 - `--ticker`：(必要) 股票代號。
 - `--start`：(必要) 起始日期 (YYYY-MM-DD)。
 - `--end`：(必要) 結束日期 (YYYY-MM-DD)。
@@ -99,6 +105,8 @@ python plottingTrends_tddc_modified.py --input "F:\Investment and Finance\tdcc_t
 ```
 **參數說明：**
 - `--base`：(必要) 專案根目錄路徑。
+- 儲存：程式會將最終產出的趨勢圖 (.png 檔) 和彙總數據 (.xlsx 檔)，分別儲存到 --base 路徑下的 output/trends_detailed、output/trends_aggregated 和 data/trends_aggregated 資料夾中。
+
 - `--input`：(必要) 第二步產生的Excel檔案路徑。
 - `--scheme`：(可選) 分組方案 (shares/amount/custom)，預設為 `shares`。
 - `--price`：(金額分組時必要) 股價。
